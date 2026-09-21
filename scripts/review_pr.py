@@ -76,7 +76,8 @@ def categorize_line(line):
     findings = []
     if any(k in low for k in ("eval(", "exec(", "subprocess.call(", "os.system(")):
         findings.append("security: dynamic code execution")
-    if any(k in low for k in ("password", "secret", "api_key", "token")) and "=" in low:
+    is_env_read = any(k in low for k in ("process.env.", "os.environ", "os.getenv("))
+    if any(k in low for k in ("password", "secret", "api_key", "token")) and "=" in low and not is_env_read:
         findings.append("security: possible hardcoded credential")
     if "except:" in low or "catch (e)" in low:
         findings.append("style: bare except / empty catch swallows errors")
@@ -86,7 +87,7 @@ def categorize_line(line):
         findings.append("performance: unbounded loop")
     if any(k in low for k in ("drop table", "truncate", "delete from")) and " where" not in low:
         findings.append("security: destructive SQL without WHERE")
-    if "any" in low and "as any" in low:
+    if "as any" in low:
         findings.append("style: TypeScript any leak")
     if "fixme" in low or "todo" in low:
         findings.append("follow-up: TODO/FIXME marker")
@@ -153,7 +154,11 @@ def build_review(pr, files):
         gaps.append("No test files changed in this PR — add a unit or integration test for the new behaviour.")
     if not has_ci:
         gaps.append("No CI workflow changed — verify the new code path is covered by existing CI.")
-    if not has_docs and any(f["filename"].endswith((".py", ".ts", ".js")) and not f["filename"].endswith((".test.", ".spec.")) for f in files):
+    if not has_docs and any(
+        f["filename"].endswith((".py", ".ts", ".js"))
+        and not f["filename"].endswith((".test.ts", ".test.tsx", ".test.js", ".spec.ts", ".spec.tsx", ".spec.js"))
+        for f in files
+    ):
         gaps.append("No documentation updated — consider a short doc note for public-facing changes.")
     if gaps:
         lines.extend(f"- {g}" for g in gaps)
