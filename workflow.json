@@ -1,0 +1,144 @@
+{
+  "name": "Weekly Dev Summary (n8n + Claude)",
+  "nodes": [
+    {
+      "id": "trigger-schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "name": "Every Monday 09:00",
+      "position": [-380, -10],
+      "parameters": {
+        "rule": {
+          "field": "hour",
+          "rules": [
+            {
+              "field": "dayOfWeek",
+              "operation": "dayOfWeek",
+              "value": 1
+            },
+            {
+              "field": "hour",
+              "operation": "setTime",
+              "value": {
+                "hour": 9,
+                "minute": 0
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "fetch-repo-config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "name": "Fetch repo config",
+      "position": [-160, -10],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.WEEKLY_SUMMARY_REPO_URL || 'https://api.github.com/repos/OWNER/REPO/commits?per_page=100' }}",
+        "options": {
+          "auth": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth"
+        }
+      }
+    },
+    {
+      "id": "build-prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "name": "Build Claude prompt",
+      "position": [60, -10],
+      "parameters": {
+        "jsCode": "const commits = $input.first().json;\nconst lines = (Array.isArray(commits) ? commits : [commits]).map(c => {\n  const msg = c.commit ? c.commit.message.split('\\n')[0] : c.message;\n  const author = (c.commit && c.commit.author && c.commit.author.name) || c.author || 'unknown';\n  const date = (c.commit && c.commit.author && c.commit.author.date) || c.date || '';\n  const sha = (c.sha || '').slice(0, 7);\n  return `- ${sha} ${author} (${date}): ${msg}`;\n});\nconst prompt = `You are a senior engineering staff. Summarize the following ${lines.length} commits from the last week into a concise dev update for leadership.\\n\\nStructure:\\n1. **Highlights** — top 3 outcomes\\n2. **By author** — one-line summary per contributor\\n3. **Risk flags** — anything that looks risky (force pushes, big rewrites, missing tests)\\n4. **Suggested follow-ups** — 2-3 concrete next steps\\n\\nBe specific. Cite commit SHAs. No fluff.\\n\\nCommits:\\n${lines.join('\\n')}`;\nreturn { json: { prompt } };"
+      }
+    },
+    {
+      "id": "call-claude",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "name": "Call Claude API",
+      "position": [280, -10],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{ $env.ANTHROPIC_API_KEY }}" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "anthropic-dangerous-direct-browser-access", "value": "true" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-5-20250929', max_tokens: 2048, messages: [{ role: 'user', content: $('Build Claude prompt').first().json.prompt }] }) }}",
+        "options": { "timeout": 120000 }
+      }
+    },
+    {
+      "id": "extract-text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "name": "Extract summary text",
+      "position": [500, -10],
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nconst text = (resp.content || []).map(c => c.text || '').join('\\n');\nreturn { json: { summary: text, model: resp.model, stop_reason: resp.stop_reason } };"
+      }
+    },
+    {
+      "id": "post-to-github-issue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "name": "Post to GitHub issue",
+      "position": [720, -10],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.GITHUB_REPORT_URL || 'https://api.github.com/repos/OWNER/REPO/issues/42/comments' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{ 'Bearer ' + $env.GITHUB_TOKEN }}" },
+            { "name": "Accept", "value": "application/vnd.github+json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ body: '## Weekly Dev Summary\\n\\n' + $('Extract summary text').first().json.summary }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "notify-slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "name": "Notify Slack",
+      "position": [940, -10],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "={{ $env.SLACK_CHANNEL || '#dev-updates' }}",
+        "text": "={{ '📋 Weekly dev summary posted.\\n\\n' + $('Extract summary text').first().json.summary.slice(0, 500) + '...' }}",
+        "other": {}
+      }
+    }
+  ],
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "connections": {
+    "Every Monday 09:00": { "main": [[ { "node": "Fetch repo config", "type": "main", "index": 0 } ]] },
+    "Fetch repo config": { "main": [[ { "node": "Build Claude prompt", "type": "main", "index": 0 } ]] },
+    "Build Claude prompt": { "main": [[ { "node": "Call Claude API", "type": "main", "index": 0 } ]] },
+    "Call Claude API": { "main": [[ { "node": "Extract summary text", "type": "main", "index": 0 } ]] },
+    "Extract summary text": {
+      "main": [
+        [ { "node": "Post to GitHub issue", "type": "main", "index": 0 } ],
+        [ { "node": "Notify Slack", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Post to GitHub issue": { "main": [[]] },
+    "Notify Slack": { "main": [[]] }
+  }
+}
