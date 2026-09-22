@@ -1,69 +1,53 @@
-# PR Review Agent (Claude Code sub-agent)
+# Claude Builders Bounty 🤖
 
-A Claude Code sub-agent that reviews a GitHub pull request and posts
-a structured, actionable Markdown comment.
+> A community bounty board for Claude Code builders.
 
-## What's in it
+Building with Claude Code? Have tasks to delegate?
+Want to get paid for contributing to AI projects?
+You're in the right place.
 
-- `agents/pr-reviewer.md` — the Claude Code sub-agent definition
-  (frontmatter + workflow + safety rules).
-- `scripts/review_pr.py` — single-file, stdlib-only Python that pulls
-  the PR + diff via the GitHub REST API and renders a structured
-  Markdown review. Optional `--post` flag posts the comment back.
-- `testcases/test_offline.py` — offline unit tests for the review
-  logic (no network needed).
+---
 
-## Use in Claude Code
+## How it works
 
-1. Copy the `agents/` and `scripts/` folders into your project.
-2. From Claude Code, invoke the sub-agent:
-   ```
-   Use the pr-reviewer sub-agent on owner=octocat repo=demo pr_number=123
-   ```
-   The sub-agent runs `scripts/review_pr.py`, refines the output with
-   repo context, and (if you ask) posts it.
+**To post a bounty**
+1. Open a GitHub issue with a clear description and acceptance criteria
+2. Comment `/opire create $XXX` in the issue to set the reward
+3. Share the link — contributors will find it
 
-## Use standalone
+**To claim a bounty**
+1. Browse the open issues below
+2. Comment `/opire try` in the issue you want to work on
+3. Submit a PR — payment is automatic on merge ✅
 
-```bash
-# dry-run (print review to stdout)
-python3 scripts/review_pr.py octocat demo 123
+---
 
-# write to file
-python3 scripts/review_pr.py octocat demo 123 review.md
+## Active Bounties
 
-# post as a PR comment (needs GITHUB_TOKEN with repo scope)
-export GITHUB_TOKEN=ghp_xxx
-python3 scripts/review_pr.py --post octocat demo 123
-```
+| # | Task | Amount | Status |
+|---|------|--------|--------|
+| [#1](../../issues/1) | SKILL: Generate a CHANGELOG from git history | $50 | 🟢 Open |
+| [#2](../../issues/2) | TEMPLATE: CLAUDE.md for a Next.js + SQLite project | $75 | 🟢 Open |
+| [#3](../../issues/3) | HOOK: Block destructive bash commands in Claude Code | $100 | 🟢 Open |
+| [#4](../../issues/4) | AGENT: PR reviewer with structured Markdown output | $150 | 🟢 Open |
+| [#5](../../issues/5) | WORKFLOW: n8n + Claude API — automated weekly dev summary | $200 | 🟢 Open |
 
-## Review structure
+---
 
-Each review has:
+## Rules
 
-- **Summary** — what the PR does (from the body, or a fallback).
-- **Findings** — risky patterns detected in the `+` diff lines,
-  deduped and counted:
-  - security: dynamic code execution (`eval`/`exec`/`os.system`)
-  - security: possible hardcoded credential
-  - security: destructive SQL without `WHERE`
-  - style: leftover debug output (`console.log` / `print`)
-  - style: bare `except:` / empty `catch`
-  - style: TypeScript `any` leak
-  - performance: unbounded loop
-  - follow-up: TODO / FIXME markers
-- **Test & CI gaps** — flags missing test files, CI workflows, or
-  docs.
-- **Suggested follow-ups** — TODOs and style nits to circle back on.
+- Tasks must be related to Claude Code or AI tooling
+- Every issue must have clear acceptance criteria before a bounty is activated
+- Payment is handled by [Opire](https://opire.dev) (Stripe)
+- Quality over speed — a solid PR beats a fast one
 
-## Safety rules (enforced in the agent, not the script)
+---
 
-- Do not post to a **draft** PR unless explicitly asked.
-- Mask secrets in the posted comment.
-- For very large diffs, summarize at hunk level instead of pasting.
+## Community
 
-## Tests
+- 🐦 X: [@ClaudeBounty](https://x.com/ClaudeBounty)
+- 📧 Contact: claudebounty@gmail.com
 
-```bash
-python3 testcases/test_offline.py
-```
+---
+
+*Started by the Claude builder community · March 2026 · MIT License*
