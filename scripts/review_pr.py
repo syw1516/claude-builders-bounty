@@ -76,7 +76,8 @@ def categorize_line(line):
     findings = []
     if any(k in low for k in ("eval(", "exec(", "subprocess.call(", "os.system(")):
         findings.append("security: dynamic code execution")
-    is_env_read = any(k in low for k in ("process.env.", "os.environ", "os.getenv("))
+    is_env_read = any(k in low for k in ("process.env.", "process.env[",
+                                         "os.environ", "os.getenv("))
     if any(k in low for k in ("password", "secret", "api_key", "token")) and "=" in low and not is_env_read:
         findings.append("security: possible hardcoded credential")
     if "except:" in low or "catch (e)" in low:
@@ -94,6 +95,22 @@ def categorize_line(line):
     return findings
 
 
+TEST_SUFFIXES = (".test.ts", ".test.tsx", ".test.js", ".test.jsx",
+                 ".spec.ts", ".spec.tsx", ".spec.js", ".spec.jsx")
+SOURCE_EXTS = (".py", ".ts", ".tsx", ".js", ".jsx")
+
+
+def is_test_path(filename):
+    """精确判断测试文件：测试命名后缀（.test.ts/.spec.js...）或明确的
+    tests/ / test/ / __tests__/ 目录段。
+    旧的 `"test" in filename` 子串匹配会把 app/latest.ts、testify.py、
+    contest.js 误判成测试文件，吞掉"缺少测试"这条 gap。"""
+    fn = filename.lower()
+    if fn.endswith(TEST_SUFFIXES):
+        return True
+    return any(part in ("tests", "test", "__tests__") for part in fn.split("/"))
+
+
 def build_review(pr, files):
     """Return a structured Markdown review string."""
     title = pr.get("title", "")
@@ -102,7 +119,8 @@ def build_review(pr, files):
     head = pr.get("head", {}).get("ref", "")
     diff = ""
     for f in files:
-        diff += f.get("patch", "") + "\n"
+        # GitHub 对二进制文件不返回 patch（可能缺键或为 null），or "" 防 TypeError
+        diff += (f.get("patch") or "") + "\n"
 
     findings = []
     for line in diff.splitlines():
@@ -115,10 +133,7 @@ def build_review(pr, files):
     for f in findings:
         seen[f] = seen.get(f, 0) + 1
 
-    has_tests = any(f["filename"].endswith((".test.ts", ".test.tsx", ".test.js",
-                    ".spec.ts", ".spec.tsx", ".spec.js")) or
-                    "test" in f["filename"].lower() or
-                    "tests/" in f["filename"] for f in files)
+    has_tests = any(is_test_path(f["filename"]) for f in files)
     has_ci = any(f["filename"].startswith(".github/workflows/") for f in files)
     has_docs = any(f["filename"].lower().endswith((".md", ".rst")) for f in files)
 
@@ -155,8 +170,7 @@ def build_review(pr, files):
     if not has_ci:
         gaps.append("No CI workflow changed — verify the new code path is covered by existing CI.")
     if not has_docs and any(
-        f["filename"].endswith((".py", ".ts", ".js"))
-        and not f["filename"].endswith((".test.ts", ".test.tsx", ".test.js", ".spec.ts", ".spec.tsx", ".spec.js"))
+        f["filename"].endswith(SOURCE_EXTS) and not is_test_path(f["filename"])
         for f in files
     ):
         gaps.append("No documentation updated — consider a short doc note for public-facing changes.")

@@ -64,4 +64,32 @@ files_loop = [
 review_loop = rp.build_review(pr, files_loop)
 assert "performance: unbounded loop" in review_loop
 
-print("regression tests for env-var false positive + any-leak + loop passed")
+# ---- 第二轮回归测试（has_tests 假阳性 / doc-gap 扩展名 / env 边界 / patch null） ----
+
+# has_tests 假阳性：文件名恰好含 "test" 子串但不是测试文件，应报"缺少测试"
+for name in ("app/latest.ts", "app/api/testify.py", "src/contest.js"):
+    r = rp.build_review(pr, [{"filename": name, "patch": "+ x = 1\n"}])
+    assert "No test files changed" in r, f"{name} should be flagged as missing tests"
+
+# 但真正的测试文件仍应被识别（后缀与目录两种写法）
+for name in ("tests/login.test.tsx", "src/__tests__/app.spec.js", "test/util.test.py"):
+    r = rp.build_review(pr, [{"filename": name, "patch": "+ expect(1).toBe(1)\n"}])
+    assert "No test files changed" not in r, f"{name} should count as a test file"
+
+# doc-gap 扩展名对齐：纯 .tsx 源码 PR 应报"无文档更新"（旧列表漏 .tsx）
+r = rp.build_review(pr, [{"filename": "app/login/page.tsx", "patch": "+ const a = 1\n"}])
+assert "No documentation updated" in r, "tsx-only PR should trigger doc gap"
+
+# doc-gap 排除测试文件：纯 .test.tsx PR 不应报"无文档更新"
+r = rp.build_review(pr, [{"filename": "app/login/page.test.tsx", "patch": "+ expect(1).toBe(1)\n"}])
+assert "No documentation updated" not in r, "test-only PR should not trigger doc gap"
+
+# env 读取边界：process.env['X']（不带点）也不该误报
+r = rp.build_review(pr, [{"filename": "app/c.js", "patch": "+ const token = process.env['TOKEN']\n"}])
+assert "security: possible hardcoded credential" not in r, "process.env['X'] is an env read"
+
+# patch 键缺失或为 null（二进制文件）不应崩溃
+rp.build_review(pr, [{"filename": "assets/logo.png"}])
+rp.build_review(pr, [{"filename": "assets/logo.png", "patch": None}])
+
+print("round-2 regression tests (has_tests/doc-gap/env-boundary/patch-null) passed")
