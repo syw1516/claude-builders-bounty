@@ -1,12 +1,15 @@
 {
-  "name": "Weekly Dev Summary (n8n + Claude)",
+  "name": "Weekly Dev Summary (GitHub + Claude)",
   "nodes": [
     {
       "id": "trigger-schedule",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1,
-      "name": "Every Monday 09:00",
-      "position": [-380, -10],
+      "name": "Every Friday 17:00",
+      "position": [
+        -720,
+        0
+      ],
       "parameters": {
         "rule": {
           "field": "hour",
@@ -14,13 +17,13 @@
             {
               "field": "dayOfWeek",
               "operation": "dayOfWeek",
-              "value": 1
+              "value": 5
             },
             {
               "field": "hour",
               "operation": "setTime",
               "value": {
-                "hour": 9,
+                "hour": 17,
                 "minute": 0
               }
             }
@@ -29,28 +32,115 @@
       }
     },
     {
-      "id": "fetch-repo-config",
+      "id": "fetch-commits",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "name": "Fetch repo config",
-      "position": [-160, -10],
+      "name": "Fetch commits (7d)",
+      "position": [
+        -460,
+        -140
+      ],
       "parameters": {
         "method": "GET",
-        "url": "={{ $env.WEEKLY_SUMMARY_REPO_URL || 'https://api.github.com/repos/OWNER/REPO/commits?per_page=100' }}",
+        "url": "={{ $env.WEEKLY_SUMMARY_REPO_URL || 'https://api.github.com/repos/OWNER/REPO/commits?per_page=30' }}",
+        "sendHeaders": true,
         "options": {
-          "auth": "genericCredentialType",
-          "genericAuthType": "httpHeaderAuth"
+          "timeout": 60000
+        },
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.GITHUB_TOKEN || '' }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            }
+          ]
         }
-      }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "id": "fetch-issues",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "name": "Fetch closed issues (7d)",
+      "position": [
+        -460,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.WEEKLY_SUMMARY_ISSUES_URL || 'https://api.github.com/repos/OWNER/REPO/issues?state=closed&sort=updated&direction=desc&per_page=30' }}",
+        "sendHeaders": true,
+        "options": {
+          "timeout": 60000
+        },
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.GITHUB_TOKEN || '' }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            }
+          ]
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "id": "fetch-prs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "name": "Fetch merged PRs (7d)",
+      "position": [
+        -460,
+        140
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.WEEKLY_SUMMARY_PRS_URL || 'https://api.github.com/repos/OWNER/REPO/pulls?state=closed&sort=updated&direction=desc&per_page=30' }}",
+        "sendHeaders": true,
+        "options": {
+          "timeout": 60000
+        },
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.GITHUB_TOKEN || '' }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            }
+          ]
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
     },
     {
       "id": "build-prompt",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "name": "Build Claude prompt",
-      "position": [60, -10],
+      "position": [
+        -180,
+        0
+      ],
       "parameters": {
-        "jsCode": "const commits = $input.first().json;\nconst lines = (Array.isArray(commits) ? commits : [commits]).map(c => {\n  const msg = c.commit ? c.commit.message.split('\\n')[0] : c.message;\n  const author = (c.commit && c.commit.author && c.commit.author.name) || c.author || 'unknown';\n  const date = (c.commit && c.commit.author && c.commit.author.date) || c.date || '';\n  const sha = (c.sha || '').slice(0, 7);\n  return `- ${sha} ${author} (${date}): ${msg}`;\n});\nconst prompt = `You are a senior engineering staff. Summarize the following ${lines.length} commits from the last week into a concise dev update for leadership.\\n\\nStructure:\\n1. **Highlights** — top 3 outcomes\\n2. **By author** — one-line summary per contributor\\n3. **Risk flags** — anything that looks risky (force pushes, big rewrites, missing tests)\\n4. **Suggested follow-ups** — 2-3 concrete next steps\\n\\nBe specific. Cite commit SHAs. No fluff.\\n\\nCommits:\\n${lines.join('\\n')}`;\nreturn { json: { prompt } };"
+        "jsCode": "// Merge the three GitHub feeds (commits / closed issues / merged PRs)\n// into a one-week digest and build the Anthropic Messages API request.\nconst cutoff = Date.now() - 7 * 24 * 3600 * 1000;\nconst t = (s) => (s ? new Date(s).getTime() : 0);\n\nconst commits = [];\nconst issues = [];\nconst prs = [];\nconst seen = new Set();\nconst remember = (kind, n) => {\n  const k = kind + ':' + n;\n  if (seen.has(k)) return false;\n  seen.add(k);\n  return true;\n};\n\nfor (const item of items) {\n  const o = item.json || {};\n  if (o.pull_request) {\n    // PR objects (from the pulls endpoint, and PRs leaking in via issues)\n    if (t(o.merged_at || o.closed_at) >= cutoff && remember('pr', o.number)) prs.push(o);\n  } else if (o.state === 'closed' && typeof o.number === 'number') {\n    if (t(o.closed_at) >= cutoff && remember('issue', o.number)) issues.push(o);\n  } else if (o.sha && o.commit) {\n    const authorDate = o.commit.author ? o.commit.author.date : null;\n    if (t(authorDate) >= cutoff && remember('commit', o.sha)) commits.push(o);\n  }\n}\n\nconst commitLines = commits\n  .map((c) => '- ' + c.commit.message.split('\\n')[0] + ' (' + c.sha.slice(0, 7) + ')')\n  .join('\\n');\nconst issueLines = issues\n  .map((i) => '- #' + i.number + ' ' + i.title)\n  .join('\\n');\nconst prLines = prs\n  .map((p) => '- #' + p.number + ' ' + p.title + ' (by ' + (p.user && p.user.login ? p.user.login : 'unknown') + ')')\n  .join('\\n');\n\nconst lang = String($env.SUMMARY_LANGUAGE || 'EN').toUpperCase();\nconst langInstruction = lang === 'FR'\n  ? 'R\\u00e9dige le r\\u00e9sum\\u00e9 en fran\\u00e7ais.'\n  : 'Write the summary in English.';\n\nconst prompt = [\n  'You are a developer-communications assistant. Below is one week of',\n  'activity from a GitHub repository.',\n  '',\n  'COMMIT ACTIVITY:',\n  commitLines || '(none)',\n  '',\n  'CLOSED ISSUES:',\n  issueLines || '(none)',\n  '',\n  'MERGED PULL REQUESTS:',\n  prLines || '(none)',\n  '',\n  'Write a concise weekly development summary (150-250 words) for the team.',\n  'Use these Markdown sections:',\n  '- **What shipped** (merged PRs and their impact)',\n  '- **What changed** (notable commit activity)',\n  '- **What was closed** (issues)',\n  '- **Follow-ups / risks** (only if evident)',\n  '',\n  langInstruction,\n  'Output only the summary body, no preamble.',\n].join('\\n');\n\nreturn [{\n  json: {\n    body: {\n      model: $env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',\n      max_tokens: 1024,\n      messages: [{ role: 'user', content: prompt }],\n    },\n  },\n}];\n"
       }
     },
     {
@@ -58,87 +148,265 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "name": "Call Claude API",
-      "position": [280, -10],
+      "position": [
+        80,
+        0
+      ],
       "parameters": {
         "method": "POST",
-        "url": "https://api.anthropic.com/v1/messages",
+        "url": "={{ $env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com' }}/v1/messages",
         "sendHeaders": true,
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.body }}",
+        "options": {
+          "timeout": 300000
+        },
         "headerParameters": {
           "parameters": [
-            { "name": "x-api-key", "value": "={{ $env.ANTHROPIC_API_KEY }}" },
-            { "name": "anthropic-version", "value": "2023-06-01" },
-            { "name": "anthropic-dangerous-direct-browser-access", "value": "true" }
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.ANTHROPIC_API_KEY || '' }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
           ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-5-20250929', max_tokens: 2048, messages: [{ role: 'user', content: $('Build Claude prompt').first().json.prompt }] }) }}",
-        "options": { "timeout": 120000 }
-      }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 10000
     },
     {
       "id": "extract-text",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "name": "Extract summary text",
-      "position": [500, -10],
+      "position": [
+        340,
+        0
+      ],
       "parameters": {
-        "jsCode": "const resp = $input.first().json;\nconst text = (resp.content || []).map(c => c.text || '').join('\\n');\nreturn { json: { summary: text, model: resp.model, stop_reason: resp.stop_reason } };"
+        "jsCode": "// Anthropic Messages API response -> plain summary text.\nconst texts = ($json.content || []).filter((c) => c.type === 'text').map((c) => c.text);\nconst summary = texts.join('\\n').trim();\nreturn [{ json: { summary: summary || '(empty response from model)' } }];\n"
       }
     },
     {
-      "id": "post-to-github-issue",
+      "id": "post-issue",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "name": "Post to GitHub issue",
-      "position": [720, -10],
+      "position": [
+        600,
+        -100
+      ],
       "parameters": {
         "method": "POST",
         "url": "={{ $env.GITHUB_REPORT_URL || 'https://api.github.com/repos/OWNER/REPO/issues/42/comments' }}",
         "sendHeaders": true,
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { body: $json.summary } }}",
+        "options": {
+          "timeout": 60000
+        },
         "headerParameters": {
           "parameters": [
-            { "name": "Authorization", "value": "={{ 'Bearer ' + $env.GITHUB_TOKEN }}" },
-            { "name": "Accept", "value": "application/vnd.github+json" }
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.GITHUB_TOKEN || '' }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ body: '## Weekly Dev Summary\\n\\n' + $('Extract summary text').first().json.summary }) }}",
-        "options": {}
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "if-slack",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "name": "Slack webhook set?",
+      "position": [
+        600,
+        140
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "slack-set",
+              "leftValue": "={{ $env.SLACK_WEBHOOK_URL || '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
       }
     },
     {
-      "id": "notify-slack",
-      "type": "n8n-nodes-base.slack",
-      "typeVersion": 1,
-      "name": "Notify Slack",
-      "position": [940, -10],
+      "id": "slack-webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "name": "Notify Slack webhook",
+      "position": [
+        860,
+        140
+      ],
       "parameters": {
-        "resource": "message",
-        "operation": "post",
-        "channel": "={{ $env.SLACK_CHANNEL || '#dev-updates' }}",
-        "text": "={{ '📋 Weekly dev summary posted.\\n\\n' + $('Extract summary text').first().json.summary.slice(0, 500) + '...' }}",
-        "other": {}
-      }
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { text: $json.summary } }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     }
   ],
   "pinData": {},
-  "meta": {
-    "templateCredsSetupCompleted": false
-  },
   "connections": {
-    "Every Monday 09:00": { "main": [[ { "node": "Fetch repo config", "type": "main", "index": 0 } ]] },
-    "Fetch repo config": { "main": [[ { "node": "Build Claude prompt", "type": "main", "index": 0 } ]] },
-    "Build Claude prompt": { "main": [[ { "node": "Call Claude API", "type": "main", "index": 0 } ]] },
-    "Call Claude API": { "main": [[ { "node": "Extract summary text", "type": "main", "index": 0 } ]] },
-    "Extract summary text": {
+    "Every Friday 17:00": {
       "main": [
-        [ { "node": "Post to GitHub issue", "type": "main", "index": 0 } ],
-        [ { "node": "Notify Slack", "type": "main", "index": 0 } ]
+        [
+          {
+            "node": "Fetch commits (7d)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch closed issues (7d)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch merged PRs (7d)",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Post to GitHub issue": { "main": [[]] },
-    "Notify Slack": { "main": [[]] }
-  }
+    "Fetch commits (7d)": {
+      "main": [
+        [
+          {
+            "node": "Build Claude prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch closed issues (7d)": {
+      "main": [
+        [
+          {
+            "node": "Build Claude prompt",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Fetch merged PRs (7d)": {
+      "main": [
+        [
+          {
+            "node": "Build Claude prompt",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Build Claude prompt": {
+      "main": [
+        [
+          {
+            "node": "Call Claude API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Claude API": {
+      "main": [
+        [
+          {
+            "node": "Extract summary text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract summary text": {
+      "main": [
+        [
+          {
+            "node": "Post to GitHub issue",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Slack webhook set?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack webhook set?": {
+      "main": [
+        [
+          {
+            "node": "Notify Slack webhook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "id": "975b90bd-5dee-480c-9d9a-07dba7d8818a"
 }
