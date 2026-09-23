@@ -93,3 +93,44 @@ rp.build_review(pr, [{"filename": "assets/logo.png"}])
 rp.build_review(pr, [{"filename": "assets/logo.png", "patch": None}])
 
 print("round-2 regression tests (has_tests/doc-gap/env-boundary/patch-null) passed")
+
+# ---- 第三轮回归测试（验收四段式结构 + Confidence + 新版风险分类） ----
+
+# 四段式标题必须逐字出现（bounty #4 验收：Summary / Identified risks /
+# Improvement suggestions / Confidence score）
+for heading in ("### Summary of changes", "### Identified risks",
+                "### Improvement suggestions", "### Confidence score"):
+    assert heading in review, f"missing section: {heading}"
+
+# Confidence 必须是 Low / Medium / High 之一，且出现在独立加粗行
+import re
+m = re.search(r"### Confidence score\n+\*\*(Low|Medium|High)\*\*", review)
+assert m, "confidence score line missing"
+
+# 含 security 风险的 PR → High（当前样例 PR 含 eval 等 security finding）
+assert m.group(1) == "High", f"security risk should give High, got {m.group(1)}"
+
+# 无风险的小 PR → Medium
+pr_small = dict(pr, additions=10)
+r_small = rp.build_review(pr_small, [{"filename": "app/a.py", "patch": "+ x = 1\n"}])
+m = re.search(r"### Confidence score\n+\*\*(Low|Medium|High)\*\*", r_small)
+assert m and m.group(1) == "Medium", f"small clean PR should be Medium, got {m and m.group(1)}"
+
+# 超大 diff（>40 文件或 >2000 行）→ Low
+pr_big = dict(pr, additions=3000)
+r_big = rp.build_review(pr_big, [{"filename": "a/b.py", "patch": "+ x = 1\n"}])
+assert "**Low**" in r_big.split("### Confidence score")[1], "huge diff should be Low"
+
+# 有测试覆盖但无风险 → 仍应 High（测试覆盖提升可信度）
+r_tested = rp.build_review(pr_small, [{"filename": "tests/a.test.py", "patch": "+ expect(1).toBe(1)\n"}])
+assert "**High**" in r_tested.split("### Confidence score")[1], "test coverage should give High"
+
+# style/follow-up 类不应出现在 Identified risks（归入 Improvement suggestions）
+assert "leftover debug output" not in review.split("### Identified risks")[1].split("### Improvement suggestions")[0], \
+    "style findings must not appear under Identified risks"
+assert "leftover debug output" in review.split("### Improvement suggestions")[1]
+
+# security 类仍应在 Identified risks
+assert "dynamic code execution" in review.split("### Identified risks")[1].split("### Improvement suggestions")[0]
+
+print("round-3 regression tests (4-section layout / confidence / risk split) passed")

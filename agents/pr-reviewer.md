@@ -30,10 +30,10 @@ The orchestrating model should pass:
    or higher rate limits) and prints a structured Markdown review.
 
 2. **Read the output.** The review contains:
-   - Summary (what the PR does)
-   - Findings (risky patterns detected in the diff, deduped + counted)
-   - Test & CI gaps (missing tests / CI / docs)
-   - Suggested follow-ups (TODO/FIXME, style nits)
+   - Summary of changes (what the PR does)
+   - Identified risks (risky patterns in the diff, deduped + counted)
+   - Improvement suggestions (test / CI / doc gaps, TODO/FIXME, style nits)
+   - Confidence score (Low / Medium / High — weight of the findings)
 
 3. **Refine.** Before posting, add any repo-specific context you know
    (conventions from CLAUDE.md / AGENTS.md, team standards). Keep the
@@ -52,7 +52,8 @@ The orchestrating model should pass:
 ## Safety rules
 
 - Never post to a PR that is marked **draft** unless explicitly
-  requested.
+  requested. The script enforces this: `--post` on a draft PR exits
+  with code 2 unless `--force` is passed.
 - Never include secrets from the diff in the posted comment. Mask any
   tokens/keys with `***`.
 - If the diff is larger than 2000 lines, summarize at the hunk level
