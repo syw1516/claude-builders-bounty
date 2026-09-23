@@ -57,6 +57,13 @@ The Claude response is plain Markdown, posted verbatim as an issue comment:
 If the week has no activity, the summary says so explicitly instead of
 inventing content.
 
+> **Verification endpoint note:** the run above was verified through a
+> self-hosted Anthropic-compatible proxy (cost savings for testing) —
+> `ANTHROPIC_BASE_URL` pointed at a local proxy. The workflow uses the
+> standard Anthropic Messages API, so switching to the official
+> `api.anthropic.com` with a real `sk-ant-…` key is a one-line env
+> change; no workflow modification is needed.
+
 ## Tuning
 
 - **Different cadence** — change the schedule trigger (daily, bi-weekly, …).
